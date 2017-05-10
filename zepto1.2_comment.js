@@ -153,7 +153,7 @@
       })
     }
 
-    //无论 values 是否是数组，都将返回一个正确的数组
+    //[[a,b,v],r]->[a,b,v,r]
     function flatten(array) {
       return array.length > 0 ? $.fn.concat.apply([], array) : array
     }
@@ -195,6 +195,7 @@
     function maybeAddPx(name, value) {
       return (typeof value == "number" && !cssNumber[dasherize(name)]) ? value + "px" : value
     }
+
 
     // 获取一个元素的默认 display 样式值
     function defaultDisplay(nodeName) {
@@ -246,8 +247,8 @@
       if (singleTagRE.test(html)) dom = $(document.createElement(RegExp.$1))
 
       if (!dom) {
-        if (html.replace) html = html.replace(tagExpanderRE, "<$1></$2>")
-        if (name === undefined) name = fragmentRE.test(html) && RegExp.$1
+        if (html.replace) html = html.replace(tagExpanderRE, "<$1></$2>") //将需要扩展的标签进行扩展
+        if (name === undefined) name = fragmentRE.test(html) && RegExp.$1   //获取第一个标签名（以确定父元素的类型）
         if (!(name in containers)) name = '*'
 
         container = containers[name]
@@ -427,6 +428,7 @@
     // "08"    => "08"
     // JSON    => parse if valid
     // String  => self
+    // Object/Array => 原样返回
     function deserializeValue(value) {
       try {
         return value ?
@@ -434,7 +436,7 @@
           (value == "false" ? false :
             value == "null" ? null :
             +value + "" == value ? +value :
-            /^[\[\{]/.test(value) ? $.parseJSON(value) :  //以[或{开头：数组或对象使用JSON.parse解析
+            /^[\[\{]/.test(value) ? $.parseJSON(value) :  //以[或{开头：数组或对象字符串使用JSON.parse解析。JSON.parse传入非字符串会抛出异常？
             value) :
           value
       } catch (e) {
@@ -514,7 +516,6 @@
 
       return elements
     }
-
     //简单地封装了一下数组的filter方法
     $.grep = function(elements, callback) {
       return filter.call(elements, callback)
@@ -586,20 +587,24 @@
       size: function() {  //获取数组/Z集合长度
         return this.length
       },
-      remove: function() {
+      remove: function() {  //将集合中所有元素从文档中移除
         return this.each(function() {
           if (this.parentNode != null)
             this.parentNode.removeChild(this)
         })
       },
       each: function(callback) {
-        emptyArray.every.call(this, function(el, idx) {
+        emptyArray.every.call(this, function(el, idx) { //利用every方法遇到返回值为false的处理项就会停止遍历的特性
           return callback.call(el, idx, el) !== false
         })
         return this
       },
+      /**
+       * [description]
+       * @param  {[type]} selector (1)Function:保留return为true的项 (2)String选择器:使用zepto.matches方法，保留为true的项
+       */
       filter: function(selector) {
-        if (isFunction(selector)) return this.not(this.not(selector))
+        if (isFunction(selector)) return this.not(this.not(selector)) //负负得正
         return $(filter.call(this, function(element) {
           return zepto.matches(element, selector)
         }))
@@ -610,13 +615,17 @@
       is: function(selector) {  //集合第一个元素是否匹配该选择器
         return this.length > 0 && zepto.matches(this[0], selector)
       },
+      /**
+       * [description]
+       * @param  {Function||String(selector)||Array} selector
+       */
       not: function(selector) {
         var nodes = []
-        if (isFunction(selector) && selector.call !== undefined)
+        if (isFunction(selector) && selector.call !== undefined)  //用函数筛选出返回false项
           this.each(function(idx) {
             if (!selector.call(this, idx)) nodes.push(this)
           })
-        else {
+        else {  //(1)否定选择器 (2)数组
           var excludes = typeof selector == 'string' ? this.filter(selector) :
             (likeArray(selector) && isFunction(selector.item)) ? slice.call(selector) : $(selector)
           this.forEach(function(el) {
@@ -625,16 +634,20 @@
         }
         return $(nodes)
       },
+      //在集合中筛选出子元素有 Element||selector的项
       has: function(selector) {
         return this.filter(function() {
           return isObject(selector) ?
-            $.contains(this, selector) :
-            $(this).find(selector).size()
+            $.contains(this, selector) :  //selector:Element
+            $(this).find(selector).size() //selector:String
         })
       },
+      //idx除了-1外不允许其它负数
+      //返回普通DOM数组
       eq: function(idx) {
-        return idx === -1 ? this.slice(idx) : this.slice(idx, +idx + 1)
+        return idx === -1 ? this.slice(idx) : this.slice(idx, +idx + 1) //slice返回单项依然是数组
       },
+      //返回第一项作为Z集合
       first: function() {
         var el = this[0]
         return el && !isObject(el) ? el : $(el)
@@ -645,30 +658,41 @@
       },
       find: function(selector) {
         var result, $this = this
-        if (!selector) result = $()
-        else if (typeof selector == 'object')
+        if (!selector) result = $() //selector为空：空Z集合
+        else if (typeof selector == 'object') //selector为对象
+        //以对象构造出Z集合。如果集合中的项是作为this中任意一个元素的子元素的话就保留，否则过滤掉
           result = $(selector).filter(function() {
             var node = this
             return emptyArray.some.call($this, function(parent) {
               return $.contains(parent, node)
             })
           })
-        else if (this.length == 1) result = $(zepto.qsa(this[0], selector))
-        else result = this.map(function() {
+        //使用频率更高的操作放在前面
+        //如果this只有一个项，就查找这个项的子元素
+        else if (this.length == 1) result = $(zepto.qsa(this[0], selector)) //selector为String(选择器)
+        else result = this.map(function() { //如果this有多个项，查找每个项的子元素并返回由查找值组成的数组
           return zepto.qsa(this, selector)
         })
         return result
       },
+      /**
+       * 查找最近的符合指定要求的节点
+       * @param  {[type]} selector (1)String选择器 (2)数组、Z集合
+       * @param  {[type]} context  只在context的后代元素中查找
+       * @return {[type]}          this集合中每个元素的那个符合要求的祖先元素的Z集合（不重复），注意可能包含自身元素
+       */
       closest: function(selector, context) {
         var nodes = [],
           collection = typeof selector == 'object' && $(selector)
         this.each(function(_, node) {
+          //node为false或符合集合就停止循环
           while (node && !(collection ? collection.indexOf(node) >= 0 : zepto.matches(node, selector)))
-            node = node !== context && !isDocument(node) && node.parentNode
+            node = node !== context && !isDocument(node) && node.parentNode //若找至context节点或document节点还没找到就将node设为false
           if (node && nodes.indexOf(node) < 0) nodes.push(node)
         })
         return $(nodes)
       },
+      //获取this集合中每个节点的祖先元素节点（至document元素为止），并根据selector进行filter，得出所有符合要求的祖先节点（不包括自身节点）
       parents: function(selector) {
         var ancestors = [],
           nodes = this
@@ -681,19 +705,23 @@
           })
         return filtered(ancestors, selector)
       },
+      //获取每个项的父元素组成的数组（不重复），并根据selector进行filter
       parent: function(selector) {
         return filtered(uniq(this.pluck('parentNode')), selector)
       },
+      //获取每个项的子Element元素组成的数组（经过flatten的），并根据selector进行filter
       children: function(selector) {
         return filtered(this.map(function() {
           return children(this)
         }), selector)
       },
+      //获取每个项的子元素(任意类型)组成的数组
       contents: function() {
         return this.map(function() {
           return this.contentDocument || slice.call(this.childNodes)
         })
       },
+      //获取每个项的同级Element元素组成的数组
       siblings: function(selector) {
         return filtered(this.map(function(i, el) {
           return filter.call(children(el.parentNode), function(child) {
@@ -701,20 +729,24 @@
           })
         }), selector)
       },
+      //将每个项置为空标签
       empty: function() {
         return this.each(function() {
           this.innerHTML = ''
         })
       },
       // `pluck` is borrowed from Prototype.js
+      // 取得该集合每个项的property属性值组成的数组
       pluck: function(property) {
         return $.map(this, function(el) {
           return el[property]
         })
       },
+      //将元素原有的display:none覆盖/移除，若元素display不为none就什么都不做
       show: function() {
         return this.each(function() {
-          this.style.display == "none" && (this.style.display = '')
+          this.style.display == "none" && (this.style.display = '') //如果内联样式中display为none就删除该样式
+          //删了还是display为none那就是样式表中定义的，要设置一个内联样式将其覆盖
           if (getComputedStyle(this, '').getPropertyValue("display") == "none")
             this.style.display = defaultDisplay(this.nodeName)
         })
@@ -722,6 +754,7 @@
       replaceWith: function(newContent) {
         return this.before(newContent).remove()
       },
+      //将每个数组项的元素各自 wrapAll
       wrap: function(structure) {
         var func = isFunction(structure)
         if (this[0] && !func)
@@ -735,16 +768,22 @@
           )
         })
       },
+      //使this中的所有元素成为structure的子元素
+      //本质上是
+      //(1)将structure insertBefore 在 this 首元素前面 。注意如果 structure 目前在文档中的话会脱离文档，除非 this 元素项的数目大于一（会cloneNode）
+      //(2)在 structure 最内层元素中 append（使用insertBefore实现）每个 this 元素项。注意 this 也会脱离原文档位置。
+      //因此 this 需要已经在文档中
       wrapAll: function(structure) {
         if (this[0]) {
-          $(this[0]).before(structure = $(structure))
+          $(this[0]).before(structure = $(structure)) //将structure放在第一个元素前
           var children
           // drill down to the inmost element
-          while ((children = structure.children()).length) structure = children.first()
+          while ((children = structure.children()).length) structure = children.first() //不断获取第一个子元素，直到没有子元素为止
           $(structure).append(this)
         }
         return this
       },
+      //将每个数组项的元素的子节点 wrapAll ，如果为空元素（没有子节点）就直接放个structure上去
       wrapInner: function(structure) {
         var func = isFunction(structure)
         return this.each(function(index) {
@@ -754,6 +793,7 @@
           contents.length ? contents.wrapAll(dom) : self.append(dom)
         })
       },
+      //注意只会保留子节点中的元素节点
       unwrap: function() {
         this.parent().each(function() {
           $(this).replaceWith($(this).children())
@@ -768,26 +808,30 @@
       hide: function() {
         return this.css("display", "none")
       },
+      //切换显示/隐藏
       toggle: function(setting) {
         return this.each(function() {
           var el = $(this);
           (setting === undefined ? el.css("display") == "none" : setting) ? el.show(): el.hide()
         })
       },
+      //使用了Element Traversal API 获取Element类型的节点
       prev: function(selector) {
         return $(this.pluck('previousElementSibling')).filter(selector || '*')
       },
       next: function(selector) {
         return $(this.pluck('nextElementSibling')).filter(selector || '*')
       },
+      //设置和获取innerHTML
       html: function(html) {
-        return 0 in arguments ?
+        return 0 in arguments ? //有参数->清空后append（为什么不直接设置innerHTML?）
           this.each(function(idx) {
             var originHtml = this.innerHTML
             $(this).empty().append(funcArg(this, html, idx, originHtml))
           }) :
-          (0 in this ? this[0].innerHTML : null)
+          (0 in this ? this[0].innerHTML : null)  //无参数->获取
       },
+      //设置和获取textContent(IE11+才支持，与innerText作用差不多)
       text: function(text) {
         return 0 in arguments ?
           this.each(function(idx) {
@@ -798,22 +842,24 @@
       },
       attr: function(name, value) {
         var result
-        return (typeof name == 'string' && !(1 in arguments)) ?
+        return (typeof name == 'string' && !(1 in arguments)) ? //name:String 取值操作
           (0 in this && this[0].nodeType == 1 && (result = this[0].getAttribute(name)) != null ? result : undefined) :
-          this.each(function(idx) {
+          this.each(function(idx) { //name:{} || name:String;value:Function 赋值操作
             if (this.nodeType !== 1) return
-            if (isObject(name))
+            if (isObject(name)) //name:{}
               for (key in name) setAttribute(this, key, name[key])
-            else setAttribute(this, name, funcArg(this, value, idx, this.getAttribute(name)))
+            else setAttribute(this, name, funcArg(this, value, idx, this.getAttribute(name))) //name:String;value:Function(idx,attrValue)或String
           })
       },
+      //name:以空格分隔的String属性名，在this的每个元素上删除这些属性
       removeAttr: function(name) {
         return this.each(function() {
           this.nodeType === 1 && name.split(' ').forEach(function(attribute) {
-            setAttribute(this, attribute)
+            setAttribute(this, attribute) //删除属性
           }, this)
         })
       },
+      //设置和获取内置属性
       prop: function(name, value) {
         name = propMap[name] || name
         return (1 in arguments) ?
@@ -825,34 +871,34 @@
       removeProp: function(name) {
         name = propMap[name] || name
         return this.each(function() {
-          delete this[name]
+          delete this[name] //delete无法删除内置属性，所以这个方法到底有什卵用
         })
       },
+      //设置和获取data-xxx属性。获取时会使用JSON.parse解析为字面量。（使用attr属性）
       data: function(name, value) {
-        var attrName = 'data-' + name.replace(capitalRE, '-$1').toLowerCase()
-
+        var attrName = 'data-' + name.replace(capitalRE, '-$1').toLowerCase() //name:myName -> data-my-name
         var data = (1 in arguments) ?
-          this.attr(attrName, value) :
-          this.attr(attrName)
-
+          this.attr(attrName, value) :  //this
+          this.attr(attrName) //属性值||undefined||false
         return data !== null ? deserializeValue(data) : undefined
       },
       val: function(value) {
-        if (0 in arguments) {
-          if (value == null) value = ""
+        if (0 in arguments) { //设置  //可设置select的value
+          if (value == null) value = "" //其实设为null也能实现清除value属性的效果啊
           return this.each(function(idx) {
             this.value = funcArg(this, value, idx, this.value)
           })
-        } else {
-          return this[0] && (this[0].multiple ?
+        } else {  //获取
+          return this[0] && (this[0].multiple ? //多选下拉菜单标签
             $(this[0]).find('option').filter(function() {
               return this.selected
             }).pluck('value') :
             this[0].value)
         }
       },
+      //设置和获取元素相对于文档的定位，返回{left,top,width,height}
       offset: function(coordinates) {
-        if (coordinates) return this.each(function(index) {
+        if (coordinates) return this.each(function(index) { //设置
           var $this = $(this),
             coords = funcArg(this, coordinates, index, $this.offset()),
             parentOffset = $this.offsetParent().offset(),
@@ -864,7 +910,9 @@
           if ($this.css('position') == 'static') props['position'] = 'relative'
           $this.css(props)
         })
-        if (!this.length) return null
+
+        //读取
+        if (!this.length) return null   //this为空则返回null
         if (document.documentElement !== this[0] && !$.contains(document.documentElement, this[0]))
           return {
             top: 0,
@@ -878,13 +926,14 @@
           height: Math.round(obj.height)
         }
       },
+
       css: function(property, value) {
-        if (arguments.length < 2) {
+        if (arguments.length < 2) { //获取
           var element = this[0]
-          if (typeof property == 'string') {
+          if (typeof property == 'string') {  //参数String:获取 行内样式style || 计算样式
             if (!element) return
             return element.style[camelize(property)] || getComputedStyle(element, '').getPropertyValue(property)
-          } else if (isArray(property)) {
+          } else if (isArray(property)) { //参数:Array:获取多个样式 返回{a:value1,b:value2}
             if (!element) return
             var props = {}
             var computedStyle = getComputedStyle(element, '')
@@ -895,15 +944,16 @@
           }
         }
 
+        //设置样式（行内样式style）
         var css = ''
-        if (type(property) == 'string') {
-          if (!value && value !== 0)
+        if (type(property) == 'string') { //设置单个属性
+          if (!value && value !== 0)  //value为false || '' || null 删除属性:将行内样式style的相应属性移除
             this.each(function() {
               this.style.removeProperty(dasherize(property))
             })
           else
             css = dasherize(property) + ":" + maybeAddPx(property, value)
-        } else {
+        } else {    //设置多个属性
           for (key in property)
             if (!property[key] && property[key] !== 0)
               this.each(function() {
@@ -914,18 +964,20 @@
         }
 
         return this.each(function() {
-          this.style.cssText += ';' + css
+          this.style.cssText += ';' + css   //cssText如果被赋了多个相同的属性，只会保留最后被设置的那个属性
         })
       },
       index: function(element) {
         return element ? this.indexOf($(element)[0]) : this.parent().children().indexOf(this[0])
       },
+      //this里是否至少有一个元素拥有name这个类
       hasClass: function(name) {
         if (!name) return false
         return emptyArray.some.call(this, function(el) {
           return this.test(className(el))
         }, classRE(name))
       },
+      //为this里的每个项添加类名，多个类名用空格分隔，已存在则不添加
       addClass: function(name) {
         if (!name) return this
         return this.each(function(idx) {
@@ -934,7 +986,7 @@
           var cls = className(this),
             newName = funcArg(this, name, idx, cls)
           newName.split(/\s+/g).forEach(function(klass) {
-            if (!$(this).hasClass(klass)) classList.push(klass)
+            if (!$(this).hasClass(klass)) classList.push(klass) //定义要添加的类名：classList
           }, this)
           classList.length && className(this, cls + (cls ? " " : "") + classList.join(" "))
         })
@@ -942,7 +994,7 @@
       removeClass: function(name) {
         return this.each(function(idx) {
           if (!('className' in this)) return
-          if (name === undefined) return className(this, '')
+          if (name === undefined) return className(this, '')  //无参数：全部清空
           classList = className(this)
           funcArg(this, name, idx, classList).split(/\s+/g).forEach(function(klass) {
             classList = classList.replace(classRE(klass), " ")
@@ -1038,9 +1090,11 @@
 
       $.fn[dimension] = function(value) {
         var offset, el = this[0]
-        if (value === undefined) return isWindow(el) ? el['inner' + dimensionProperty] :
-          isDocument(el) ? el.documentElement['scroll' + dimensionProperty] :
-          (offset = this.offset()) && offset[dimension]
+        //获取
+        if (value === undefined) return isWindow(el) ? el['inner' + dimensionProperty] :  //视口大小：window.innerHeight
+          isDocument(el) ? el.documentElement['scroll' + dimensionProperty] :   //文档大小：document.scrollHeight
+          (offset = this.offset()) && offset[dimension] //元素大小：通过offset()方法获取(getBoundingClientRect().height)
+        //设置:设置行内样式style
         else return this.each(function(idx) {
           el = $(this)
           el.css(dimension, funcArg(this, value, idx, el[dimension]()))
@@ -1048,52 +1102,64 @@
       }
     })
 
+    //递归遍历node极其子元素
     function traverseNode(node, fun) {
       fun(node)
       for (var i = 0, len = node.childNodes.length; i < len; i++)
         traverseNode(node.childNodes[i], fun)
     }
 
+    //上文定义adjacencyOperators = ['after', 'prepend', 'before', 'append']
     // Generate the `after`, `prepend`, `before`, `append`,
+    // after:作为后一个同辈元素插入；prepend:作为第一个子元素插入；before：作为前一个同辈元素插入；append:作为最后一个子元素插入
     // `insertAfter`, `insertBefore`, `appendTo`, and `prependTo` methods.
     adjacencyOperators.forEach(function(operator, operatorIndex) {
       var inside = operatorIndex % 2 //=> prepend, append
 
       $.fn[operator] = function() {
         // arguments can be nodes, arrays of nodes, Zepto objects and HTML strings
+        // nodes : 定义要插入的元素
         var argType, nodes = $.map(arguments, function(arg) {
             var arr = []
             argType = type(arg)
-            if (argType == "array") {
+            if (argType == "array") { //传入的参数是数组
               arg.forEach(function(el) {
-                if (el.nodeType !== undefined) return arr.push(el)
-                else if ($.zepto.isZ(el)) return arr = arr.concat(el.get())
-                arr = arr.concat(zepto.fragment(el))
+                if (el.nodeType !== undefined) return arr.push(el)  //数组项是单个dom元素：直接push入arr
+                else if ($.zepto.isZ(el)) return arr = arr.concat(el.get()) //数组项是一个Z集合：将集合中的dom元素项加入arr
+                arr = arr.concat(zepto.fragment(el))  //数组项是标签字符串：解析为dom数组后加入arr
               })
               return arr
             }
+            //(1)传入Z集合/dom元素:原样返回
+            //(2)传入其它（构造字符串之类的）:返回zepto.fragment
             return argType == "object" || arg == null ?
               arg : zepto.fragment(arg)
           }),
-          parent, copyByClone = this.length > 1
+          parent,
+          //如果this元素项大于一个就要对newNode进行clone(不然每次insertBefore都会将newNode从原有的位置上删除，导致最终只能作用到一个元素上)
+          copyByClone = this.length > 1
         if (nodes.length < 1) return this
-
+        //对每个Z集合的元素项执行操作
         return this.each(function(_, target) {
-          parent = inside ? target : target.parentNode
+          parent = inside ? target : target.parentNode  //将被插入元素的父元素
 
           // convert all methods to a "before" operation
-          target = operatorIndex == 0 ? target.nextSibling :
-            operatorIndex == 1 ? target.firstChild :
-            operatorIndex == 2 ? target :
-            null
+          // 将被插入元素的后一个同辈元素
+          target = operatorIndex == 0 ? target.nextSibling :  //after
+            operatorIndex == 1 ? target.firstChild :  //prepend
+            operatorIndex == 2 ? target : //before
+            null  //append
 
           var parentInDocument = $.contains(document.documentElement, parent)
 
+          //插入所有nodes元素
           nodes.forEach(function(node) {
             if (copyByClone) node = node.cloneNode(true)
             else if (!parent) return $(node).remove()
 
             parent.insertBefore(node, target)
+
+            //这到底是要对script标签干啥
             if (parentInDocument) traverseNode(node, function(el) {
               if (el.nodeName != null && el.nodeName.toUpperCase() === 'SCRIPT' &&
                 (!el.type || el.type === 'text/javascript') && !el.src) {
